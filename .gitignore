@@ -1,3 +1,5 @@
+models
+
 data/dfyj/*
 !data/dfyj/.gitkeep
 

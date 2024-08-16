@@ -122,11 +122,7 @@ def validate(valX: torch.Tensor, valY: torch.Tensor, model: LSTM):
     print(f'RMSE: {root_mean_squared_error(real, predict)}')
 
 
-def predict(data: np.ndarray, model: LSTM, seq_length: int = 7*24*12):
-    '''
-    Predict the value of the next 7 days
-    '''
-
+def predict(data: np.ndarray, model: LSTM, window_size: int = 7*24*12):
     model.eval()
     predict = []
 
@@ -135,7 +131,7 @@ def predict(data: np.ndarray, model: LSTM, seq_length: int = 7*24*12):
         # when forecasting the respective max usage of [7/19~7/26)
         # we need the data from [7/5~7/12) to [7/12~7/19)
 
-        x = data[-seq_length - (7-i-1)*24*12: - (7-i-1)*24*12]
+        x = data[-window_size - (7-i-1)*24*12: - (7-i-1)*24*12]
         x = Variable(torch.Tensor(np.array(x)))
         y = model(x)
         predict.append(y.item())
