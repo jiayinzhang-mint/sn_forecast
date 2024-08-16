@@ -188,6 +188,7 @@ if __name__ == '__main__':
                            default='./data/dfyj/key1_20240618_20240718', required=True)
     argparser.add_argument('--output_path', type=str, required=True)
     argparser.add_argument('--max_worker', type=int, default=8)
+    argparser.add_argument('--ip_num', type=int, default=-1)
 
     args = argparser.parse_args()
     base_path = Path(args.base_path)
@@ -200,3 +201,7 @@ if __name__ == '__main__':
     res = train_ips(ips, base_path, epochs=50, device=device,
                     max_workers=max_workers)
     res.to_csv(output_path, index=False)
+
+    # remove score columns and add a suffix to the original filename
+    res.drop(columns=['mae_score', 'rmse_score', 'mape_score']).to_csv(
+        output_path.with_name(output_path.stem + '_predict.csv'), index=False)
