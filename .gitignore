@@ -1,6 +1,9 @@
 data/dfyj/*
 !data/dfyj/.gitkeep
 
+data/zt/*
+!data/zt/.gitkeep
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
