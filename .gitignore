@@ -1,5 +1,8 @@
 models
 
+results/*
+!results/.gitkeep
+
 data/dfyj/*
 !data/dfyj/.gitkeep
 

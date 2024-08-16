@@ -1,3 +1,4 @@
+import argparse
 import random
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pandas as pd
 import torch
 from sklearn.preprocessing import MinMaxScaler
 from torch.autograd import Variable
+from concurrent.futures import ThreadPoolExecutor
 from tsai.all import (TCN, Learner, TSDataLoaders, TSRegression, TSStandardize,
                       get_splits, get_ts_dls, mae, mape, rmse, ts_learner)
 
@@ -13,6 +15,13 @@ seed = 42
 np.random.seed(seed)
 random.seed(seed)
 torch.manual_seed(seed)
+
+if torch.backends.mps.is_available():
+    device = torch.device('mps')
+elif torch.cuda.is_available():
+    device = torch.device('cuda')
+else:
+    device = torch.device('cpu')
 
 
 def sliding_windows_train(data: np.ndarray, window_size: int = 7*24*12):
@@ -68,7 +77,7 @@ def load_data(base_path: Path, ip: str, window_size: int = 7*24*12, device: torc
     dataY = Variable(torch.Tensor(np.array(y)))
 
     splits = get_splits(dataY, valid_size=.3, stratify=True,
-                        random_state=23, shuffle=True)
+                        random_state=23, shuffle=True, show_plot=False)
     tfms = [None, [TSRegression()]]
     batch_tfms = TSStandardize(by_sample=True, by_var=True)
     dls = get_ts_dls(dataX, dataY, splits=splits, tfms=tfms,
@@ -83,7 +92,7 @@ def train(
 ):
     learner = ts_learner(dls, TCN, metrics=[
         mae, rmse, mape], seed=seed)
-    lr = learner.lr_find()
+    lr = learner.lr_find(show_plot=False)
     learner.fit_one_cycle(epochs, lr)
 
     return learner
@@ -157,15 +166,37 @@ def train_ip(ip: str, base_path: Path, epochs=50, device: torch.device = torch.d
     return learner, mae_score, rmse_score, mape_score, predict_res
 
 
-def train_ips(ips: list[str], base_path: Path, epochs=50, device: torch.device = torch.device('cpu')):
+def train_ips(ips: list[str], base_path: Path, epochs=50, max_workers=8, device: torch.device = torch.device('cpu')):
     res = pd.DataFrame(columns=['ip', 'mae_score',
                                 'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
-    for ip in ips:
-        _, mae_score, rmse_score, mape_score, predict_res = train_ip(
-            ip, base_path, epochs=epochs, device=device)
-        res = pd.concat([res, pd.DataFrame(
-            [[ip, mae_score, rmse_score, mape_score, *predict_res]],
-            columns=res.columns)],
-            ignore_index=True
-        )
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = executor.map(lambda ip: train_ip(
+            ip, base_path, epochs=epochs, device=device), ips)
+
+    res = pd.DataFrame(columns=['ip', 'mae_score', 'rmse_score',
+                       'mape_score', '0', '1', '2', '3', '4', '5', '6'])
+    for ip, (learner, mae_score, rmse_score, mape_score, predict_res) in zip(ips, results):
+        res = pd.concat([res, pd.DataFrame([[ip, mae_score, rmse_score,
+                        mape_score, *predict_res]], columns=res.columns)], ignore_index=True)
+
     return res
+
+
+if __name__ == '__main__':
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('--base_path', type=str,
+                           default='./data/dfyj/key1_20240618_20240718', required=True)
+    argparser.add_argument('--output_path', type=str, required=True)
+    argparser.add_argument('--max_worker', type=int, default=8)
+
+    args = argparser.parse_args()
+    base_path = Path(args.base_path)
+    output_path = Path(args.output_path)
+    max_workers = int(args.max_worker)
+
+    # find all csv files under the base_path and use the filename as the ip
+    ips = [f.stem for f in base_path.glob('*.csv')]
+
+    res = train_ips(ips, base_path, epochs=50, device=device,
+                    max_workers=max_workers)
+    res.to_csv(output_path, index=False)
