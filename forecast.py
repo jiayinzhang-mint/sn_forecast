@@ -23,15 +23,13 @@ class LSTM(nn.Module):
     def __init__(self, num_classes: int = 1,
                  input_size: int = 1,
                  hidden_size: int = 16,
-                 num_layers: int = 1,
-                 seq_length: int = 7*24*12):
+                 num_layers: int = 1):
         super(LSTM, self).__init__()
 
         self.num_classes = num_classes
         self.num_layers = num_layers
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.seq_length = seq_length
 
         self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size,
                             num_layers=num_layers, batch_first=True)
@@ -44,23 +42,24 @@ class LSTM(nn.Module):
         return out
 
 
-def sliding_windows(data: np.ndarray, seq_length: int):
+def sliding_windows(data: np.ndarray, window_size: int):
     x = []
     y = []
 
-    for i in range(len(data)-seq_length-1-seq_length-7*24*12):
-        _x = data[i:(i+seq_length)]
+    for i in range(len(data)-window_size-1-8*24*12):
+        _x = data[i:(i+window_size)]
         x.append(_x)
 
         # y is the max of the respective next 7th day
-        _y = np.max(data[i+seq_length+7*24*12: i +
-                    seq_length+7*24*12+seq_length])
+        # e.g. when x is the data from [7/5~7/12), y is the max of [7/19,7/20)
+        _y = np.max(data[i+window_size+7*24*12: i +
+                    window_size+7*24*12+24*12])
         y.append(_y)
 
     return np.array(x), np.array(y)
 
 
-def load_data(base_path: Path, ip: str, seq_length: int = 7*24*12):
+def load_data(base_path: Path, ip: str, window_size: int = 7*24*12):
     df = pd.read_csv(base_path.joinpath(
         f"{ip}.csv"), parse_dates=['timestamp'])
     maxstatsvalue = np.array([df['maxstatsvalue']])
@@ -70,7 +69,7 @@ def load_data(base_path: Path, ip: str, seq_length: int = 7*24*12):
         maxstatsvalue.transpose()
     )
 
-    x, y = sliding_windows(data, seq_length)
+    x, y = sliding_windows(data, window_size)
 
     train_size = int(len(y) * 0.67)
     test_size = len(y) - train_size
@@ -84,7 +83,7 @@ def load_data(base_path: Path, ip: str, seq_length: int = 7*24*12):
     testX = Variable(torch.Tensor(np.array(x[train_size:len(x)])))
     testY = Variable(torch.Tensor(np.array(y[train_size:len(y)])))
 
-    return (train_size, test_size, dataX, dataY, trainX, trainY, testX, testY)
+    return (sc, train_size, test_size, data, dataX, dataY, trainX, trainY, testX, testY)
 
 
 def train(
@@ -123,5 +122,22 @@ def validate(valX: torch.Tensor, valY: torch.Tensor, model: LSTM):
     print(f'RMSE: {root_mean_squared_error(real, predict)}')
 
 
-def predict(model: LSTM):
+def predict(data: np.ndarray, model: LSTM, seq_length: int = 7*24*12):
+    '''
+    Predict the value of the next 7 days
+    '''
+
     model.eval()
+    predict = []
+
+    for i in range(7):
+        # e.g.
+        # when forecasting the respective max usage of [7/19~7/26)
+        # we need the data from [7/5~7/12) to [7/12~7/19)
+
+        x = data[-seq_length - (7-i-1)*24*12: - (7-i-1)*24*12]
+        x = Variable(torch.Tensor(np.array(x)))
+        y = model(x)
+        predict.append(y.item())
+
+    return predict
