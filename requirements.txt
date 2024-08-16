@@ -3,3 +3,4 @@ pandas
 torch
 matplotlib
 scikit-learn
+tsai 
