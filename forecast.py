@@ -7,7 +7,6 @@ import pandas as pd
 import torch
 from sklearn.preprocessing import MinMaxScaler
 from torch.autograd import Variable
-from concurrent.futures import ThreadPoolExecutor
 from tsai.all import (TCN, Learner, TSDataLoaders, TSRegression, TSStandardize,
                       get_splits, get_ts_dls, mae, mape, rmse, ts_learner)
 
@@ -59,10 +58,16 @@ def sliding_windows_predict(data: np.ndarray, window_size: int = 7*24*12):
     return np.array(x)
 
 
-def load_data(base_path: Path, ip: str, window_size: int = 7*24*12, device: torch.device = torch.device('cpu')):
+def load_data(base_path: Path, ip: str, window_size: int = 7*24*12, rolling=1, device: torch.device = torch.device('cpu')):
     df = pd.read_csv(base_path.joinpath(
         f"{ip}.csv"), parse_dates=['timestamp'])
-    maxstatsvalue = np.array([df['maxstatsvalue']])
+
+    # rolling
+    df_roll = df['maxstatsvalue'].rolling(rolling).mean()
+    df_roll = df_roll.dropna()
+    df_roll = df_roll.reset_index(drop=True)
+
+    maxstatsvalue = np.array([df_roll])
 
     sc = MinMaxScaler()
     data = sc.fit_transform(
@@ -88,7 +93,7 @@ def load_data(base_path: Path, ip: str, window_size: int = 7*24*12, device: torc
 
 def train(
     dls: TSDataLoaders,
-    epochs=50
+    epochs=50,
 ):
     learner = ts_learner(dls, TCN, metrics=[
         mae, rmse, mape], seed=seed)
@@ -116,11 +121,14 @@ def validate(valX: torch.Tensor, valY: torch.Tensor, learner: Learner):
     _, _, test_preds = learner.get_X_preds(
         valX, with_decoded=True)
 
-    mae_score = mae(torch.tensor(test_preds).to('cpu'), valY.to('cpu'))
-    rmse_score = rmse(torch.tensor(test_preds).to('cpu'), valY.to('cpu'))
-    mape_score = mape(torch.tensor(test_preds).to('cpu'), valY.to('cpu'))
+    mae_score: torch.Tensor = mae(torch.tensor(
+        test_preds).to('cpu'), valY.to('cpu'))
+    rmse_score: torch.Tensor = rmse(
+        torch.tensor(test_preds).to('cpu'), valY.to('cpu'))  # type: ignore
+    mape_score: torch.Tensor = mape(
+        torch.tensor(test_preds).to('cpu'), valY.to('cpu'))
 
-    return mae_score, rmse_score, mape_score
+    return mae_score.item(), rmse_score.item(), mape_score.item()
 
 
 def predict(dataX: torch.Tensor, model: Learner, sc: MinMaxScaler):
@@ -150,8 +158,9 @@ def predict(dataX: torch.Tensor, model: Learner, sc: MinMaxScaler):
     return sc.inverse_transform(test_preds).squeeze()
 
 
-def train_ip(ip: str, base_path: Path, epochs=50, device: torch.device = torch.device('cpu')):
-    sc, data, _, _, dls = load_data(base_path, ip, device=device)
+def train_ip(ip: str, base_path: Path, epochs=50, rolling=1, device: torch.device = torch.device('cpu')):
+    sc, data, _, _, dls = load_data(
+        base_path=base_path, ip=ip, rolling=rolling, device=device)
     learner = train(dls, epochs=epochs)
     valX, valY = dls.valid.one_batch()
     mae_score, rmse_score, mape_score = validate(
@@ -166,18 +175,21 @@ def train_ip(ip: str, base_path: Path, epochs=50, device: torch.device = torch.d
     return learner, mae_score, rmse_score, mape_score, predict_res
 
 
-def train_ips(ips: list[str], base_path: Path, epochs=50, max_workers=8, device: torch.device = torch.device('cpu')):
+def train_ips(ips: list[str], base_path: Path, epochs=50, rolling=1, device: torch.device = torch.device('cpu')):
     res = pd.DataFrame(columns=['ip', 'mae_score',
                                 'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = executor.map(lambda ip: train_ip(
-            ip, base_path, epochs=epochs, device=device), ips)
+    failed_ips = []
+    for ip in ips:
+        try:
+            _, mae_score, rmse_score, mape_score, predict_res = train_ip(
+                ip, base_path, rolling=rolling, epochs=epochs, device=device)
+            res = pd.concat([res, pd.DataFrame([[ip, mae_score, rmse_score,
+                            mape_score, *predict_res]], columns=res.columns)], ignore_index=True)
+        except Exception as e:
+            print(f"Failed to train ip {ip}, error: {e}")
+            failed_ips.append(ip)
 
-    res = pd.DataFrame(columns=['ip', 'mae_score', 'rmse_score',
-                       'mape_score', '0', '1', '2', '3', '4', '5', '6'])
-    for ip, (learner, mae_score, rmse_score, mape_score, predict_res) in zip(ips, results):
-        res = pd.concat([res, pd.DataFrame([[ip, mae_score, rmse_score,
-                        mape_score, *predict_res]], columns=res.columns)], ignore_index=True)
+    print(failed_ips)
 
     return res
 
@@ -187,19 +199,15 @@ if __name__ == '__main__':
     argparser.add_argument('--base_path', type=str,
                            default='./data/dfyj/key1_20240618_20240718', required=True)
     argparser.add_argument('--output_path', type=str, required=True)
-    argparser.add_argument('--max_worker', type=int, default=8)
-    argparser.add_argument('--ip_num', type=int, default=-1)
 
     args = argparser.parse_args()
     base_path = Path(args.base_path)
     output_path = Path(args.output_path)
-    max_workers = int(args.max_worker)
 
     # find all csv files under the base_path and use the filename as the ip
     ips = [f.stem for f in base_path.glob('*.csv')]
 
-    res = train_ips(ips, base_path, epochs=50, device=device,
-                    max_workers=max_workers)
+    res = train_ips(ips, base_path, epochs=50, device=device)
     res.to_csv(output_path, index=False)
 
     # remove score columns and add a suffix to the original filename
