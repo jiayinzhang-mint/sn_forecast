@@ -58,9 +58,19 @@ def sliding_windows_predict(data: np.ndarray, window_size: int = 7*24*12):
     return np.array(x)
 
 
-def load_data(base_path: Path, ip: str, window_size: int = 7*24*12, rolling=1, device: torch.device = torch.device('cpu')):
-    df = pd.read_csv(base_path.joinpath(
-        f"{ip}.csv"), parse_dates=['timestamp'])
+def load_data(base_path: Path,
+              ip: str,
+              window_size: int = 7*24*12,
+              rolling=1,
+              device: torch.device = torch.device('cpu'),
+              ):
+    if ip.endswith('*'):
+        # load all csv files with the prefix
+        df = pd.concat([pd.read_csv(f, parse_dates=['timestamp'])
+                        for f in base_path.glob(f"{ip[:-1]}*.csv")])
+    else:
+        df = pd.read_csv(base_path.joinpath(
+            f"{ip}.csv"), parse_dates=['timestamp'])
 
     # rolling
     df_roll = df['maxstatsvalue'].rolling(rolling).mean()
@@ -94,10 +104,11 @@ def load_data(base_path: Path, ip: str, window_size: int = 7*24*12, rolling=1, d
 def train(
     dls: TSDataLoaders,
     epochs=50,
+    show_plot=False
 ):
     learner = ts_learner(dls, TCN, metrics=[
         mae, rmse, mape], seed=seed)
-    lr = learner.lr_find(show_plot=False)
+    lr = learner.lr_find(show_plot=show_plot)
     learner.fit_one_cycle(epochs, lr)
 
     return learner
@@ -185,6 +196,7 @@ def train_ips(ips: list[str], base_path: Path, epochs=50, rolling=1, device: tor
                 ip, base_path, rolling=rolling, epochs=epochs, device=device)
             res = pd.concat([res, pd.DataFrame([[ip, mae_score, rmse_score,
                             mape_score, *predict_res]], columns=res.columns)], ignore_index=True)
+            res.to_csv(output_path, index=False)
         except Exception as e:
             print(f"Failed to train ip {ip}, error: {e}")
             failed_ips.append(ip)
@@ -208,7 +220,6 @@ if __name__ == '__main__':
     ips = [f.stem for f in base_path.glob('*.csv')]
 
     res = train_ips(ips, base_path, epochs=50, device=device)
-    res.to_csv(output_path, index=False)
 
     # remove score columns and add a suffix to the original filename
     res.drop(columns=['mae_score', 'rmse_score', 'mape_score']).to_csv(
