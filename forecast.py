@@ -7,8 +7,9 @@ import pandas as pd
 import torch
 from sklearn.preprocessing import MinMaxScaler
 from torch.autograd import Variable
-from tsai.all import (TCN, Learner, TSDataLoaders, TSRegression, TSStandardize,
-                      get_splits, get_ts_dls, mae, mape, rmse, ts_learner)
+from tsai.all import (TCN, Learner, SaveModel, TSDataLoaders, TSRegression,
+                      TSStandardize, get_splits, get_ts_dls, mae, mape, rmse,
+                      ts_learner)
 
 seed = 42
 np.random.seed(seed)
@@ -64,7 +65,11 @@ def load_data(base_path: Path,
               rolling=1,
               device: torch.device = torch.device('cpu'),
               ):
+
     if ip.endswith('*'):
+        ips = [f.stem for f in base_path.glob(f"{ip[:-1]}*.csv")]
+        print('selected ips:', ips)
+
         # load all csv files with the prefix
         df = pd.concat([pd.read_csv(f, parse_dates=['timestamp'])
                         for f in base_path.glob(f"{ip[:-1]}*.csv")])
@@ -98,18 +103,24 @@ def load_data(base_path: Path,
     dls = get_ts_dls(dataX, dataY, splits=splits, tfms=tfms,
                      batch_tfms=batch_tfms, bs=128, device=device, seed=seed)
 
-    return (sc, data, dataX, dataY, dls)
+    return (sc, data, dataX, dataY, dls, ips)
 
 
 def train(
     dls: TSDataLoaders,
     epochs=50,
-    show_plot=False
+    show_plot=False,
+    save_model_path: Path | None = None,
 ):
+    cbs = []
+    if save_model_path:
+        cbs.append(SaveModel(fname=str(save_model_path)))
+
     learner = ts_learner(dls, TCN, metrics=[
         mae, rmse, mape], seed=seed)
     lr = learner.lr_find(show_plot=show_plot)
-    learner.fit_one_cycle(epochs, lr)
+    learner.fit_one_cycle(
+        epochs, lr, cbs=cbs)
 
     return learner
 
@@ -169,57 +180,78 @@ def predict(dataX: torch.Tensor, model: Learner, sc: MinMaxScaler):
     return sc.inverse_transform(test_preds).squeeze()
 
 
-def train_ip(ip: str, base_path: Path, epochs=50, rolling=1, device: torch.device = torch.device('cpu')):
-    sc, data, _, _, dls = load_data(
+def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
+             device: torch.device = torch.device('cpu'),
+             save_model_dir: Path | None = None):
+    '''
+    Train the model for a specific ip or a set of ips with the same prefix
+    '''
+
+    _save_model_dir = None
+    if save_model_dir:
+        _save_model_dir = save_model_dir.joinpath(ip)
+
+    sc, data, _, _, dls, ips = load_data(
         base_path=base_path, ip=ip, rolling=rolling, device=device)
-    learner = train(dls, epochs=epochs)
+    learner = train(dls, epochs=epochs,
+                    save_model_path=_save_model_dir)
     valX, valY = dls.valid.one_batch()
     mae_score, rmse_score, mape_score = validate(
         valX, valY, learner=learner)
 
-    dataX_predict = torch.from_numpy(sliding_windows_predict(data))
-    dataX_predict = dataX_predict.reshape(
-        dataX_predict.shape[0], 1, dataX_predict.shape[1])
-
-    predict_res = predict(dataX_predict, learner, sc)
-
-    return learner, mae_score, rmse_score, mape_score, predict_res
-
-
-def train_ips(ips: list[str], base_path: Path, epochs=50, rolling=1, device: torch.device = torch.device('cpu')):
+    failed_ips = []
     res = pd.DataFrame(columns=['ip', 'mae_score',
                                 'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
-    failed_ips = []
+
+    # load data for prediction
     for ip in ips:
         try:
-            _, mae_score, rmse_score, mape_score, predict_res = train_ip(
-                ip, base_path, rolling=rolling, epochs=epochs, device=device)
+            _, data, _, _, _, _ = load_data(
+                base_path=base_path, ip=ip, rolling=rolling, device=device)
+
+            dataX_predict = torch.from_numpy(sliding_windows_predict(data))
+            dataX_predict = dataX_predict.reshape(
+                dataX_predict.shape[0], 1, dataX_predict.shape[1])
+
+            predict_res = predict(dataX_predict, learner, sc)
+
             res = pd.concat([res, pd.DataFrame([[ip, mae_score, rmse_score,
                             mape_score, *predict_res]], columns=res.columns)], ignore_index=True)
             res.to_csv(output_path, index=False)
         except Exception as e:
-            print(f"Failed to train ip {ip}, error: {e}")
+            print(f"Failed to predict ip {ip}, error: {e}")
             failed_ips.append(ip)
 
     print(failed_ips)
 
-    return res
+    return learner, mae_score, rmse_score, mape_score, res
 
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--base_path', type=str,
                            default='./data/dfyj/key1_20240618_20240718', required=True)
+    argparser.add_argument('--ip', type=str, required=True,
+                           help='ip or ip prefix with *')
+    argparser.add_argument('--epochs', type=int, default=50)
     argparser.add_argument('--output_path', type=str, required=True)
+    argparser.add_argument('--save_model_dir', default='', type=str)
 
     args = argparser.parse_args()
     base_path = Path(args.base_path)
+    ip = str(args.ip)
+    epochs = int(args.epochs)
     output_path = Path(args.output_path)
+    save_model_dir = Path(args.save_model_dir)
 
     # find all csv files under the base_path and use the filename as the ip
     ips = [f.stem for f in base_path.glob('*.csv')]
 
-    res = train_ips(ips, base_path, epochs=50, device=device)
+    if save_model_dir:
+        Path('./models').joinpath(save_model_dir).mkdir(exist_ok=True)
+
+    _, _, _, _, res = train_ip(ip, base_path, epochs=epochs, device=device,
+                               save_model_dir=save_model_dir)
 
     # remove score columns and add a suffix to the original filename
     res.drop(columns=['mae_score', 'rmse_score', 'mape_score']).to_csv(
