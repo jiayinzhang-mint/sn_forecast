@@ -234,6 +234,7 @@ if __name__ == '__main__':
     argparser.add_argument('--ip', type=str, required=True,
                            help='ip or ip prefix with *')
     argparser.add_argument('--epochs', type=int, default=50)
+    argparser.add_argument('--rolling', type=int, default=1)
     argparser.add_argument('--output_path', type=str, required=True)
     argparser.add_argument('--save_model_dir', default='', type=str)
 
@@ -241,6 +242,7 @@ if __name__ == '__main__':
     base_path = Path(args.base_path)
     ip = str(args.ip)
     epochs = int(args.epochs)
+    rolling = int(args.rolling)
     output_path = Path(args.output_path)
     save_model_dir = Path(args.save_model_dir)
 
@@ -250,7 +252,7 @@ if __name__ == '__main__':
     if save_model_dir:
         Path('./models').joinpath(save_model_dir).mkdir(exist_ok=True)
 
-    _, _, _, _, res = train_ip(ip, base_path, epochs=epochs, device=device,
+    _, _, _, _, res = train_ip(ip, base_path, epochs=epochs, rolling=rolling, device=device,
                                save_model_dir=save_model_dir)
 
     # remove score columns and add a suffix to the original filename
