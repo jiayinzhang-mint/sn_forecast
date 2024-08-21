@@ -185,6 +185,14 @@ def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
              save_model_dir: Path | None = None):
     '''
     Train the model for a specific ip or a set of ips with the same prefix
+
+    Args:
+    - ip: a specific ip or a prefix with * (e.g. 1.2.3.4 or 10.0.0.*)
+    - base_path: dataset path with csv files for each ip
+    - epochs: number of epochs for training
+    - rolling: rolling window size
+    - device: torch.device
+    - save_model_dir: save the model to the specified directory
     '''
 
     _save_model_dir = None
