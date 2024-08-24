@@ -76,6 +76,7 @@ def load_data(base_path: Path,
     else:
         df = pd.read_csv(base_path.joinpath(
             f"{ip}.csv"), parse_dates=['timestamp'])
+        ips = [ip]
 
     # rolling
     df_roll = df['maxstatsvalue'].rolling(rolling).mean()
@@ -182,7 +183,8 @@ def predict(dataX: torch.Tensor, model: Learner, sc: MinMaxScaler):
 
 def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
              device: torch.device = torch.device('cpu'),
-             save_model_dir: Path | None = None):
+             save_model_dir: Path | None = None,
+             res: pd.DataFrame | None = None,):
     '''
     Train the model for a specific ip or a set of ips with the same prefix
 
@@ -208,14 +210,16 @@ def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
         valX, valY, learner=learner)
 
     failed_ips = []
-    res = pd.DataFrame(columns=['ip', 'mae_score',
-                                'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
+
+    if res is None:
+        res = pd.DataFrame(columns=['ip', 'mae_score',
+                                    'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
 
     # load data for prediction
-    for ip in ips:
+    for ip_item in ips:
         try:
             _, data, _, _, _, _ = load_data(
-                base_path=base_path, ip=ip, rolling=rolling, device=device)
+                base_path=base_path, ip=ip_item, rolling=rolling, device=device)
 
             dataX_predict = torch.from_numpy(sliding_windows_predict(data))
             dataX_predict = dataX_predict.reshape(
@@ -228,19 +232,37 @@ def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
             res.to_csv(output_path, index=False)
         except Exception as e:
             print(f"Failed to predict ip {ip}, error: {e}")
-            failed_ips.append(ip)
+            failed_ips.append(ip_item)
 
-    print(failed_ips)
+    if len(failed_ips) > 0:
+        print('failed ips: ', failed_ips)
 
     return learner, mae_score, rmse_score, mape_score, res
+
+
+def find_ip_prefixes(base_path: Path, segments: int = 2):
+    '''
+    Find all ip prefixes with the same prefix
+
+    Args:
+    - base_path: dataset path with csv files for each ip
+    - segments: number of segments to consider (e.g. 3 for 10.0.0.*)
+    '''
+
+    ips = [f.stem for f in base_path.glob('*.csv')]
+    prefixes = [('.'.join(ip.split('.')[:segments]) + '*') for ip in ips]
+
+    return list(set(prefixes))
 
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--base_path', type=str,
                            default='./data/dfyj/key1_20240618_20240718', required=True)
-    argparser.add_argument('--ip', type=str, required=True,
-                           help='ip or ip prefix with *')
+    argparser.add_argument('--ip', type=str, default='',
+                           help='ip or ip prefix with *. if not provided, predict all ips')
+    argparser.add_argument('--segments', type=int, default=2,
+                           help='number of segments to consider (e.g. 3 for 10.0.0.*)')
     argparser.add_argument('--epochs', type=int, default=50)
     argparser.add_argument('--rolling', type=int, default=1)
     argparser.add_argument('--output_path', type=str, required=True)
@@ -249,19 +271,28 @@ if __name__ == '__main__':
     args = argparser.parse_args()
     base_path = Path(args.base_path)
     ip = str(args.ip)
+    segments = int(args.segments)
     epochs = int(args.epochs)
     rolling = int(args.rolling)
     output_path = Path(args.output_path)
     save_model_dir = Path(args.save_model_dir)
 
-    # find all csv files under the base_path and use the filename as the ip
-    ips = [f.stem for f in base_path.glob('*.csv')]
-
     if save_model_dir:
         Path('./models').joinpath(save_model_dir).mkdir(exist_ok=True)
 
-    _, _, _, _, res = train_ip(ip, base_path, epochs=epochs, rolling=rolling, device=device,
-                               save_model_dir=save_model_dir)
+    if ip != '':
+        _, _, _, _, res = train_ip(ip, base_path, epochs=epochs, rolling=rolling, device=device,
+                                   save_model_dir=save_model_dir)
+    elif segments:
+        prefixes = find_ip_prefixes(base_path, segments)
+        print('prefixes: ', prefixes)
+        res = pd.DataFrame(columns=['ip', 'mae_score',
+                                    'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
+        for prefix in prefixes:
+            _, _, _, _, _res = train_ip(prefix, base_path, epochs=epochs, rolling=rolling, device=device,
+                                        save_model_dir=save_model_dir, res=res)
+            res = pd.concat([res, _res], ignore_index=True)
+            print('-----------------')
 
     # remove score columns and add a suffix to the original filename
     res.drop(columns=['mae_score', 'rmse_score', 'mape_score']).to_csv(
