@@ -4,6 +4,9 @@ models/*
 results/*
 !results/.gitkeep
 
+data/*
+!data/.gitkeep
+
 data/dfyj/*
 !data/dfyj/.gitkeep
 
