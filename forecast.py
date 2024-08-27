@@ -227,11 +227,11 @@ def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
 
             predict_res = predict(dataX_predict, learner, sc)
 
-            res = pd.concat([res, pd.DataFrame([[ip, mae_score, rmse_score,
+            res = pd.concat([res, pd.DataFrame([[ip_item, mae_score, rmse_score,
                             mape_score, *predict_res]], columns=res.columns)], ignore_index=True)
             res.to_csv(output_path, index=False)
         except Exception as e:
-            print(f"Failed to predict ip {ip}, error: {e}")
+            print(f"Failed to predict ip {ip_item}, error: {e}")
             failed_ips.append(ip_item)
 
     if len(failed_ips) > 0:

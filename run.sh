@@ -1,0 +1,2 @@
+python forecast.py --base_path='./data/dfyj' --output_path='results/dfyj_key1_0827.csv' --epochs=50 --rolling=20
+python forecast.py --base_path='./data/hlwzt' --output_path='results/hlwzt_key1_0827.csv' --epochs=50 --rolling=20
