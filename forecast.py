@@ -172,7 +172,7 @@ def predict(dataX: torch.Tensor, model: Learner, sc: MinMaxScaler):
     for i in range(7):
         idx = -(6-i)*24*12-1
         data = dataX[idx]
-        predictX.append(data)
+        predictX.append(data.numpy().tolist())
 
     predictX = torch.from_numpy(np.array(predictX))
     _, _, test_preds = model.get_X_preds(
