@@ -113,15 +113,14 @@ def train(
     show_plot=False,
     save_model_path: Path | None = None,
 ):
-    cbs = []
-    if save_model_path:
-        cbs.append(SaveModel(fname=str(save_model_path)))
-
     learner = ts_learner(dls, TCN, metrics=[
         mae, rmse, mape], seed=seed)
-    lr = learner.lr_find(show_plot=show_plot)
+    # lr = learner.lr_find(show_plot=show_plot)
     learner.fit_one_cycle(
-        epochs, lr, cbs=cbs)
+        epochs, 1e-3)
+
+    # if save_model_path:
+    #     learner.export(save_model_path)
 
     return learner
 
@@ -184,7 +183,7 @@ def predict(dataX: torch.Tensor, model: Learner, sc: MinMaxScaler):
 def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
              device: torch.device = torch.device('cpu'),
              save_model_dir: Path | None = None,
-             res: pd.DataFrame | None = None,):
+             ):
     '''
     Train the model for a specific ip or a set of ips with the same prefix
 
@@ -211,9 +210,8 @@ def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
 
     failed_ips = []
 
-    if res is None:
-        res = pd.DataFrame(columns=['ip', 'mae_score',
-                                    'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
+    res = pd.DataFrame(columns=['ip', 'mae_score',
+                                'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
 
     # load data for prediction
     for ip_item in ips:
@@ -229,7 +227,7 @@ def train_ip(ip: str, base_path: Path, epochs=50, rolling=1,
 
             res = pd.concat([res, pd.DataFrame([[ip_item, mae_score, rmse_score,
                             mape_score, *predict_res]], columns=res.columns)], ignore_index=True)
-            res.to_csv(output_path, index=False)
+
         except Exception as e:
             print(f"Failed to predict ip {ip_item}, error: {e}")
             failed_ips.append(ip_item)
@@ -280,19 +278,25 @@ if __name__ == '__main__':
     if save_model_dir:
         Path('./models').joinpath(save_model_dir).mkdir(exist_ok=True)
 
-    if ip != '':
-        _, _, _, _, res = train_ip(ip, base_path, epochs=epochs, rolling=rolling, device=device,
-                                   save_model_dir=save_model_dir)
-    elif segments:
-        prefixes = find_ip_prefixes(base_path, segments)
-        print('prefixes: ', prefixes)
-        res = pd.DataFrame(columns=['ip', 'mae_score',
-                                    'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
-        for prefix in prefixes:
-            _, _, _, _, _res = train_ip(prefix, base_path, epochs=epochs, rolling=rolling, device=device,
-                                        save_model_dir=save_model_dir, res=res)
+    res = pd.DataFrame(columns=['ip', 'mae_score',
+                                'rmse_score', 'mape_score', '0', '1', '2', '3', '4', '5', '6'])
+
+    ips = [f.stem for f in base_path.glob('*.csv')]
+    failed_ips = []
+
+    for ip in ips:
+        try:
+            _, _, _, _, _res = train_ip(ip, base_path, epochs=epochs, rolling=rolling, device=device,
+                                        save_model_dir=save_model_dir)
             res = pd.concat([res, _res], ignore_index=True)
             print('-----------------')
+        except Exception as e:
+            print(f"Failed to predict ip {ip}, error: {e}")
+            failed_ips.append(ip)
+
+        res.to_csv(output_path, index=False)
+
+    print(failed_ips)
 
     # remove score columns and add a suffix to the original filename
     res.drop(columns=['mae_score', 'rmse_score', 'mape_score']).to_csv(
