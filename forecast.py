@@ -32,14 +32,11 @@ def sliding_windows_train(data: np.ndarray, window_size: int = 7*24*12):
     x = []
     y = []
 
-    for i in range(len(data)-window_size-1-8*24*12):
+    for i in range(len(data)-window_size):
         _x = data[i:(i+window_size)]
         x.append(_x)
 
-        # y is the max of the respective next 7th day
-        # e.g. when x is the data from [7/5~7/12), y is the max of [7/19,7/20)
-        _y = np.max(data[i+window_size+7*24*12: i +
-                    window_size+7*24*12+24*12])
+        _y = data[i+window_size]
         y.append(_y)
 
     return np.array(x), np.array(y)
